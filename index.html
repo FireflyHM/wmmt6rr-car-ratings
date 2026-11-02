@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WMMT6RR Car Ratings</title>
+<meta name="description" content="Wangan Midnight Maximum Tune 6RR car ratings, torque curves and shift points, read from the game's physics data.">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --color-bg: #f7f6f3; --color-panel: #ffffff; --color-fg: #1f1e1b; --color-fg-muted: #6b6860;
+    --color-border-line: #e2dfd8; --color-ok: #2f7d4f; --color-warn: #b7791f; --color-bad: #c2413b;
+    --chart-1: #2f6fd0; --chart-2: #d9822b; --chart-3: #1f9e89; --chart-4: #8a5cc7; --chart-5: #d14d72;
+    --cds-chart-grid: #ecebe6; --cds-chart-axis: #b9b5ab; --cds-chart-muted: #c9c5bb; --cds-chart-reference: #8f8b82;
+    --cds-chart-status-critical: #2f6fd0;
+    --cds-surface-popover: #ffffff; --cds-border: #d6d2c9; --cds-text-secondary: #6b6860;
+    --cds-shadow-popover: 0 4px 16px rgba(0, 0, 0, .12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --color-bg: #1a1917; --color-panel: #24231f; --color-fg: #ecebe6; --color-fg-muted: #a6a29a;
+      --color-border-line: #3a3833; --color-ok: #5cb87f; --color-warn: #e0a64a; --color-bad: #ea6b64;
+      --chart-1: #6c9dea; --chart-2: #eba159; --chart-3: #4cc2ad; --chart-4: #ac88e0; --chart-5: #ec7a98;
+      --cds-chart-grid: #2f2e2a; --cds-chart-axis: #5b5850; --cds-chart-muted: #4d4a44; --cds-chart-reference: #8a867d;
+      --cds-chart-status-critical: #6c9dea;
+      --cds-surface-popover: #2c2b27; --cds-border: #45433d; --cds-text-secondary: #a6a29a;
+      --cds-shadow-popover: 0 4px 16px rgba(0, 0, 0, .5);
+    }
+  }
+  :root {
+    --font-anthropic-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-anthropic-serif: Georgia, "Times New Roman", serif;
+    --cds-font-size-caption: 0.8125rem; --cds-font-size-body: 0.9375rem; --cds-font-size-heading: 1.0625rem; --cds-font-size-title: 1.75rem;
+    --cds-font-weight-medium: 600;
+    --cds-gap-xs: 0.25rem; --cds-gap-sm: 0.5rem; --cds-gap-md: 1rem; --cds-gap-lg: 1.5rem;
+    --cds-pad-xs: 0.25rem; --cds-pad-sm: 0.5rem; --cds-pad-md: 0.75rem; --cds-pad-lg: 1.25rem;
+    --cds-radius: 8px; --cds-dur-slow: 300ms;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-anthropic-sans); line-height: 1.45; }
+  main { max-width: 72rem; margin: 0 auto; padding: 2rem 16px 3rem; }
+  .dash-skeleton { background: linear-gradient(90deg, var(--cds-chart-grid), var(--color-border-line), var(--cds-chart-grid)); background-size: 200% 100%; animation: sk 1.4s ease-in-out infinite; border-radius: var(--cds-radius); }
+  span.dash-skeleton, b.dash-skeleton { color: transparent; }
+  @keyframes sk { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+  @media (prefers-reduced-motion: reduce) { .dash-skeleton { animation: none; } }
+  .site-foot { margin-top: 2rem; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); max-width: 75ch; }
+</style>
+<script>
+// Stand-in for the dashboard runtime: loads the JSON files, runs the calcs
+// and calls every onData listener on load and on resize.
+window.dash = (function () {
+  const files = {"ratings": "data/car_ratings.json", "torque": "data/torque_curves.json", "gear_lines": "data/gear_lines.json", "shift_points": "data/shift_points.json"};
+  const state = {};
+  const calcs = [];
+  const listeners = [];
+  for (const k of Object.keys(files)) state[k] = { status: 'loading', data: [] };
+  const colors = [1, 2, 3, 4, 5].map((i) => `var(--chart-${i})`);
+  function runCalcs() {
+    for (const c of calcs) {
+      const ins = c.inputs.map((n) => state[n]);
+      if (ins.every((s) => s.status === 'ok')) {
+        try { state[c.name] = { status: 'ok', data: c.fn(...ins.map((s) => s.data)) }; }
+        catch (e) { state[c.name] = { status: 'error', data: [] }; }
+      } else state[c.name] = { status: ins.some((s) => s.status === 'error') ? 'error' : 'loading', data: [] };
+    }
+  }
+  function notify() { runCalcs(); for (const f of listeners) f(); }
+  let timer;
+  window.addEventListener('resize', () => { clearTimeout(timer); timer = setTimeout(notify, 150); });
+  function load() {
+    Promise.all(Object.entries(files).map(([k, url]) =>
+      fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then((d) => { state[k] = { status: 'ok', data: d }; })
+        .catch(() => { state[k] = { status: 'error', data: [] }; })
+    )).then(notify);
+  }
+  document.addEventListener('DOMContentLoaded', load);
+  return {
+    colors,
+    data: (name) => state[name] || { status: 'loading', data: [] },
+    calc: (name, def) => { calcs.push({ name, ...def }); state[name] = { status: 'loading', data: [] }; },
+    onData: (f) => { listeners.push(f); f(); },
+  };
+})();
+
+</script>
+</head>
+<body>
+<main>
+<style>
+  .cr { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); }
+  .cr-head { display: flex; flex-direction: column; gap: var(--cds-gap-xs); }
+  .cr-title { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+  .cr-take { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-body); max-width: 70ch; }
+  .cr .cr-take b { font-weight: 600; color: var(--color-fg); }
+  .cr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: var(--cds-gap-md); }
+  .cr-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+  .cr-card h2 { margin: 0; font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); }
+  .cr-note { margin: 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .cr-chart { position: relative; min-height: 320px; }
+  .cr-tip { position: absolute; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); pointer-events: none; max-width: 18rem; z-index: 2; }
+  .cr-tip .k { color: var(--cds-text-secondary); }
+  .cr-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .cr-legend span { display: inline-flex; align-items: center; gap: var(--cds-gap-xs); }
+  .cr-legend i { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; }
+  .cr-tools { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: center; }
+  .cr-tools input, .cr-tools select { font: inherit; font-size: var(--cds-font-size-body); padding: var(--cds-pad-xs) var(--cds-pad-sm); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); background: var(--color-bg); color: var(--color-fg); }
+  .cr-tools input { flex: 1 1 14rem; min-width: 0; }
+  .cr-tablebox { max-height: 70vh; overflow: auto; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); }
+  .cr-table { border-collapse: collapse; width: 100%; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+  .cr-table th { position: sticky; top: 0; background: var(--color-panel); text-align: left; font-weight: var(--cds-font-weight-medium); padding: 0; border-bottom: 1px solid var(--color-border-line); white-space: nowrap; z-index: 1; }
+  .cr-table th button { all: unset; cursor: pointer; display: block; padding: var(--cds-pad-xs) var(--cds-pad-sm); }
+  .cr-table th button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
+  .cr-table th[aria-sort] button::after { content: " ↓"; color: var(--color-fg-muted); }
+  .cr-table th[aria-sort="ascending"] button::after { content: " ↑"; }
+  .cr-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); vertical-align: top; }
+  .cr-table td.num, .cr-table th.num { text-align: right; }
+  .cr-table td.cars { min-width: 14rem; }
+  .cr-grade { display: inline-block; min-width: 1.6rem; text-align: center; border-radius: var(--cds-radius); padding: 0 var(--cds-pad-xs); font-weight: 600; border: 1px solid currentColor; }
+  .cr-grade.g-S, .cr-grade.g-A { color: var(--color-ok); }
+  .cr-grade.g-B { color: var(--color-fg-muted); }
+  .cr-grade.g-C { color: var(--color-warn); }
+  .cr-grade.g-D { color: var(--color-bad); }
+  .cr-bar { display: flex; align-items: center; gap: var(--cds-gap-xs); justify-content: flex-end; }
+  .cr-bar i { display: inline-block; height: 0.45rem; border-radius: 999px; background: var(--cds-chart-muted); }
+  .cr-bar i.on { background: var(--cds-chart-status-critical); }
+  .cr-raw { color: var(--color-fg-muted); }
+  .cr-method { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: var(--cds-gap-xs); font-size: var(--cds-font-size-body); max-width: 75ch; }
+  .cr-fail { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); min-height: inherit; }
+  .cr-fail::before { content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-bad); }
+  [data-dash-source-state=empty] { color: transparent; }
+  [data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+  @media (max-width: 40rem) { .cr-table .opt { display: none; } }
+  .cr-seg { display: inline-flex; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); overflow: hidden; align-self: flex-start; }
+  .cr-seg button { font: inherit; font-size: var(--cds-font-size-body); padding: var(--cds-pad-xs) var(--cds-pad-md); border: 0; background: var(--color-bg); color: var(--color-fg-muted); cursor: pointer; }
+  .cr-seg button + button { border-left: 1px solid var(--color-border-line); }
+  .cr-seg button[aria-pressed="true"] { background: var(--color-panel); color: var(--color-fg); font-weight: 600; }
+  .cr-seg button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
+  .cr-gearchart { position: relative; min-height: 420px; }
+</style>
+
+<div class="cr">
+  <header class="cr-head">
+    <h1 class="cr-title">WMMT6RR car ratings</h1>
+    <p class="cr-take" id="takeaway">
+      <span data-source="summary" data-field="entries" class="dash-skeleton">—</span> physics entries rated from the game's own physics data. Best overall:
+      <b data-source="ratings" data-field="cars" data-where="rank=1" class="dash-skeleton">—</b>.
+      The gap between the best and worst car is a few percent of force and grip; tuning changes far more.
+    </p>
+  </header>
+
+  <section class="cr-grid">
+    <div class="cr-card" id="map-card">
+      <h2>Top end vs cornering</h2>
+      <p class="cr-note">Each dot is one physics entry, colored by grade. Bigger dots hold several entries with the same scores. Hover for the cars.</p>
+      <div class="cr-chart dash-skeleton" id="map" data-source="ratings"></div>
+      <div class="cr-legend" id="legend" data-source="ratings"></div>
+    </div>
+    <div class="cr-card" id="method-card">
+      <h2>How the ratings work</h2>
+      <ul class="cr-method">
+        <li><b>Acceleration</b> comes from value A, which scales the drive force.</li>
+        <li><b>Top end</b> averages value B (speed scale; higher top speed) and value C turned around (C is drag that grows with speed, so less is better).</li>
+        <li><b>Cornering</b> comes from value D, which scales the tyres' sideways grip.</li>
+        <li>Each is scaled 0 to 10 across all cars. <b>Overall</b> is their average.</li>
+        <li><b>Top speed</b> is the meter reading at a 17/17 full tune with a manual gearbox. Every car shares the same top gear, final drive, 300 mm wheels and 10,000 rpm limiter, so all cars top out at about 351-353 km/h; only value B moves it. An automatic shows about 1 km/h less. This matches the 351-352 km/h players see.</li>
+        <li><b>Grades</b> are by rank: S top 10%, A next 20%, B middle 40%, C next 20%, D bottom 10%.</li>
+        <li>Each step of A or D changes force or grip by under 1%. A fully tuned car's power and grip come mostly from the tune, so these grades describe a car's character more than its pace.</li>
+        <li>Read from the game's code, not timed in races. A, B and D are traced to the physics; C and the weight offset are probable. Torque curve, drive layout, size and weight are shown but not scored.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="cr-card" id="torque-card">
+    <h2>Engine torque curves</h2>
+    <p class="cr-note">Every car uses one of these three curves; the gearbox comes with it. Torque is relative to the shared engine's base value. The dashed line is the rev limiter's cut point (9,900 rpm). Hover for values.</p>
+    <div class="cr-chart dash-skeleton" id="torque" data-source="torque curve_counts"></div>
+  </section>
+
+  <section class="cr-card" id="gearing-card">
+    <h2>Rpm vs speed by gearbox</h2>
+    <p class="cr-note">Meter speed in each gear at a 17/17 full tune (manual, value B of 0). The gearboxes are shared, so this is the same for every car with that gearbox. The colored line follows the best upshift points, and each dashed line drops to the speed to change gear at. Grey lines are each gear up to the 9,900 rpm cut. Hover a dot for details.</p>
+    <div class="cr-seg" id="gear-pick" role="group" aria-label="Gearbox">
+      <button type="button" data-box="4-speed" aria-pressed="false">4-speed</button>
+      <button type="button" data-box="5-speed" aria-pressed="false">5-speed</button>
+      <button type="button" data-box="6-speed" aria-pressed="true">6-speed</button>
+    </div>
+    <div class="cr-gearchart dash-skeleton" id="gearing" data-source="gear_lines shift_points"></div>
+  </section>
+
+  <section class="cr-card" id="table-card">
+    <h2>Every car</h2>
+    <p class="cr-note">Cars that share one physics entry drive the same at the same tune. Click a header to sort.</p>
+    <div class="cr-tools">
+      <label for="cr-search" class="cr-note">Search</label>
+      <input id="cr-search" type="search" placeholder="Car names, comma-separated, e.g. Skyline, RX-7, Supra">
+      <label for="cr-layout" class="cr-note">Layout</label>
+      <select id="cr-layout"><option value="">All</option></select>
+      <label for="cr-grade" class="cr-note">Grade</label>
+      <select id="cr-grade"><option value="">All</option><option>S</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+    </div>
+    <div class="cr-tablebox">
+      <table class="cr-table" id="cr-table" data-source="ratings" data-row-key="type">
+        <thead><tr>
+          <th data-field="rank" class="num"><button type="button" data-k="rank">#</button></th>
+          <th data-field="grade"><button type="button" data-k="rank">Grade</button></th>
+          <th data-field="cars"><button type="button" data-k="cars">Cars</button></th>
+          <th data-field="overall" class="num"><button type="button" data-k="overall">Overall</button></th>
+          <th data-field="acc" class="num"><button type="button" data-k="acc">Accel.</button></th>
+          <th data-field="top" class="num"><button type="button" data-k="top">Top end</button></th>
+          <th data-field="grip" class="num"><button type="button" data-k="grip">Cornering</button></th>
+          <th data-field="vmax_mt" class="num"><button type="button" data-k="vmax_mt">Top speed</button></th>
+          <th data-field="layout" class="opt"><button type="button" data-k="layout">Layout</button></th>
+          <th data-field="curve" class="opt"><button type="button" data-k="curve">Torque curve</button></th>
+          <th data-field="length" class="num opt"><button type="button" data-k="length">Length</button></th>
+          <th data-field="weight" class="num opt"><button type="button" data-k="weight">Weight offset</button></th>
+          <th data-field="A" class="num opt"><button type="button" data-k="A">A</button></th>
+          <th data-field="B" class="num opt"><button type="button" data-k="B">B</button></th>
+          <th data-field="C" class="num opt"><button type="button" data-k="C">C</button></th>
+          <th data-field="D" class="num opt"><button type="button" data-k="D">D</button></th>
+        </tr></thead>
+        <tbody id="cr-body"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+dash.calc('summary', {
+  inputs: ['ratings'],
+  title: 'Number of rated entries',
+  description: 'Counts the physics entries in the ratings.',
+  fn: (ratings) => [{ entries: ratings.length }]
+});
+
+dash.calc('curve_counts', {
+  inputs: ['ratings'],
+  title: 'Entries per torque curve',
+  description: 'Counts how many rated physics entries use each torque curve.',
+  fn: (ratings) => {
+    const n = {};
+    for (const r of ratings) n[r.curve] = (n[r.curve] || 0) + 1;
+    return Object.entries(n).map(([curve, entries]) => ({ curve, entries }));
+  }
+});
+
+(function () {
+  const ORDER = ['early peak', 'normal', 'flat'];
+  const fRpm = d3.format(',');
+  const f2 = d3.format('.2f');
+  function drawTorque() {
+    const box = document.getElementById('torque');
+    const d = dash.data('torque');
+    const c = dash.data('curve_counts');
+    box.textContent = '';
+    if (d.status !== 'ok') {
+      if (d.status === 'error') {
+        box.classList.remove('dash-skeleton');
+        const e = document.createElement('div'); e.className = 'cr-fail'; e.textContent = 'Failed to load'; box.appendChild(e);
+      } else box.classList.add('dash-skeleton');
+      return;
+    }
+    box.classList.remove('dash-skeleton');
+    const rows = d.data.map((r) => ({ curve: r.curve, gearbox: r.gearbox, rpm: +r.rpm, torque: +r.torque }));
+    const counts = {};
+    if (c.status === 'ok') for (const r of c.data) counts[r.curve] = r.entries;
+    const series = ORDER.map((name, i) => {
+      const pts = rows.filter((r) => r.curve === name).sort((a, b) => a.rpm - b.rpm);
+      const n = counts[name];
+      return { name, i, pts, label: `${pts[0] ? pts[0].gearbox : ''}, ${name}` + (n != null ? ` (${n})` : '') };
+    }).filter((s) => s.pts.length);
+    const w = Math.max(280, box.clientWidth);
+    const h = 320;
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${w} ${h}`).attr('role', 'img').attr('aria-label', 'Relative engine torque against rpm for the three torque curves');
+    const probe = svg.append('text').style('font-size', 'var(--cds-font-size-caption)');
+    const labelW = d3.max(series, (s) => { probe.text(s.label); return probe.node().getComputedTextLength(); }) || 0;
+    probe.remove();
+    const wide = w > 560;
+    const m = { top: 14, right: wide ? labelW + 16 : 14, bottom: 40, left: 40 };
+    const x = d3.scaleLinear([0, 10000], [m.left, w - m.right]);
+    const ymax = Math.max(1.1, d3.max(rows, (r) => r.torque) || 1);
+    const y = d3.scaleLinear([0, ymax], [h - m.bottom, m.top]);
+    const g = svg.append('g');
+    for (const v of y.ticks(5)) g.append('line').attr('x1', m.left).attr('x2', w - m.right).attr('y1', y(v)).attr('y2', y(v)).attr('stroke', 'var(--cds-chart-grid)');
+    const ax = svg.append('g').attr('transform', `translate(0,${h - m.bottom})`).call(d3.axisBottom(x).ticks(w < 420 ? 4 : 6).tickFormat((v) => fRpm(v)).tickSize(0)).attr('font-size', null).attr('font-family', null);
+    const ay = svg.append('g').attr('transform', `translate(${m.left},0)`).call(d3.axisLeft(y).ticks(5).tickFormat(d3.format('.1f')).tickSize(0)).attr('font-size', null).attr('font-family', null);
+    for (const a of [ax, ay]) { a.select('.domain').attr('stroke', 'var(--cds-chart-axis)'); a.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)'); }
+    ax.selectAll('text').attr('dy', '1.1em'); ay.selectAll('text').attr('dx', '-0.4em');
+    svg.append('text').attr('x', (m.left + w - m.right) / 2).attr('y', h - 6).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Engine rpm');
+    const lim = 9900;
+    svg.append('line').attr('x1', x(lim)).attr('x2', x(lim)).attr('y1', m.top).attr('y2', h - m.bottom).attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+    const line = d3.line().x((p) => x(p.rpm)).y((p) => y(p.torque));
+    for (const s of series) {
+      svg.append('path').attr('d', line(s.pts)).attr('fill', 'none').attr('stroke', dash.colors[s.i]).attr('stroke-width', 2).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round');
+    }
+    if (wide) {
+      const peaks = series.map((s) => { const p = s.pts.reduce((a, b) => (b.torque > a.torque ? b : a)); return { s, p, y: y(p.torque) }; });
+      peaks.sort((a, b) => a.y - b.y);
+      for (let k = 1; k < peaks.length; k++) if (peaks[k].y - peaks[k - 1].y < 14) peaks[k].y = peaks[k - 1].y + 14;
+      for (const pk of peaks) {
+        svg.append('text').attr('x', w - m.right + 8).attr('y', pk.y).attr('dy', '0.35em').attr('fill', dash.colors[pk.s.i]).style('font-size', 'var(--cds-font-size-caption)').text(pk.s.label);
+      }
+    } else {
+      const lg = document.createElement('div'); lg.className = 'cr-legend';
+      for (const s of series) { const sp = document.createElement('span'); const i = document.createElement('i'); i.style.background = dash.colors[s.i]; sp.appendChild(i); sp.appendChild(document.createTextNode(s.label)); lg.appendChild(sp); }
+      box.appendChild(lg);
+    }
+    const rule = svg.append('line').attr('y1', m.top).attr('y2', h - m.bottom).attr('stroke', 'var(--cds-chart-axis)').attr('opacity', 0);
+    const dots = series.map((s) => svg.append('circle').attr('r', 4).attr('fill', dash.colors[s.i]).attr('opacity', 0));
+    const tip = document.createElement('div'); tip.className = 'cr-tip'; tip.hidden = true; box.appendChild(tip);
+    const rpms = series[0].pts.map((p) => p.rpm);
+    svg.append('rect').attr('x', m.left).attr('y', m.top).attr('width', Math.max(0, w - m.right - m.left)).attr('height', h - m.bottom - m.top).attr('fill', 'transparent')
+      .on('mousemove', (ev) => {
+        const [mx] = d3.pointer(ev);
+        const r0 = x.invert(mx);
+        const rpm = rpms.reduce((a, b) => (Math.abs(b - r0) < Math.abs(a - r0) ? b : a));
+        rule.attr('x1', x(rpm)).attr('x2', x(rpm)).attr('opacity', 1);
+        tip.textContent = '';
+        const head = document.createElement('div'); head.className = 'k'; head.textContent = fRpm(rpm) + ' rpm'; tip.appendChild(head);
+        series.forEach((s, k) => {
+          const p = s.pts.find((q) => q.rpm === rpm);
+          if (!p) { dots[k].attr('opacity', 0); return; }
+          dots[k].attr('cx', x(p.rpm)).attr('cy', y(p.torque)).attr('opacity', 1);
+          const ln = document.createElement('div');
+          const sw = document.createElement('span'); sw.style.cssText = `display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-right:.35rem;background:${dash.colors[s.i]}`;
+          ln.appendChild(sw); ln.appendChild(document.createTextNode(`${s.name}: ${f2(p.torque)}`)); tip.appendChild(ln);
+        });
+        tip.hidden = false;
+        const bx = box.getBoundingClientRect();
+        let left = ev.clientX - bx.left + 12, top = ev.clientY - bx.top + 12;
+        if (left + tip.offsetWidth > bx.width) left = Math.max(0, ev.clientX - bx.left - tip.offsetWidth - 12);
+        if (top + tip.offsetHeight > bx.height) top = Math.max(0, ev.clientY - bx.top - tip.offsetHeight - 12);
+        tip.style.left = left + 'px'; tip.style.top = top + 'px';
+      })
+      .on('mouseleave', () => { tip.hidden = true; rule.attr('opacity', 0); dots.forEach((dt) => dt.attr('opacity', 0)); });
+  }
+  dash.onData(drawTorque);
+})();
+
+(function () {
+  const BOXES = ['4-speed', '5-speed', '6-speed'];
+  const fRpm = d3.format(',');
+  const fK = d3.format('.0f');
+  let current = '6-speed';
+  document.querySelectorAll('#gear-pick button').forEach((b) => b.addEventListener('click', () => {
+    current = b.dataset.box;
+    document.querySelectorAll('#gear-pick button').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+    drawGearing();
+  }));
+  function drawGearing() {
+    const box = document.getElementById('gearing');
+    const L = dash.data('gear_lines');
+    const S = dash.data('shift_points');
+    box.textContent = '';
+    if (L.status !== 'ok' || S.status !== 'ok') {
+      if (L.status === 'error' || S.status === 'error') { box.classList.remove('dash-skeleton'); const e = document.createElement('div'); e.className = 'cr-fail'; e.textContent = 'Failed to load'; box.appendChild(e); }
+      else box.classList.add('dash-skeleton');
+      return;
+    }
+    box.classList.remove('dash-skeleton');
+    const lines = L.data.map((r) => ({ gearbox: r.gearbox, gear: +r.gear, rpm: +r.rpm, kmh: +r.kmh }));
+    const shifts = S.data.map((r) => ({ gearbox: r.gearbox, shift: r.shift, from: +r.from_gear, rpm: +r.rpm, land: +r.land_rpm, kmh: +r.kmh }));
+    const xmax = Math.ceil((d3.max(lines, (r) => r.kmh) || 1) / 50) * 50;
+    const bi = Math.max(0, BOXES.indexOf(current));
+    const ls = lines.filter((r) => r.gearbox === current);
+    const ss = shifts.filter((r) => r.gearbox === current).sort((a, b) => a.from - b.from);
+    if (!ls.length) return;
+    const color = dash.colors[bi];
+    const w = Math.max(300, box.clientWidth);
+    const narrow = w < 520;
+    const h = narrow ? 360 : 420;
+    const m = { top: 24, right: 16, bottom: 64, left: 56 };
+    const x = d3.scaleLinear([0, xmax], [m.left, w - m.right]);
+    const y = d3.scaleLinear([0, 10000], [h - m.bottom, m.top]);
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${w} ${h}`).attr('role', 'img').attr('aria-label', `Engine rpm against meter speed for the ${current} gearbox, with the best shift speeds marked`);
+    for (const v of y.ticks(5)) svg.append('line').attr('x1', m.left).attr('x2', w - m.right).attr('y1', y(v)).attr('y2', y(v)).attr('stroke', 'var(--cds-chart-grid)');
+    const ax = svg.append('g').attr('transform', `translate(0,${h - m.bottom})`).call(d3.axisBottom(x).ticks(narrow ? 4 : 8).tickSize(0)).attr('font-size', null).attr('font-family', null);
+    const ay = svg.append('g').attr('transform', `translate(${m.left},0)`).call(d3.axisLeft(y).ticks(5).tickFormat((v) => fRpm(v)).tickSize(0)).attr('font-size', null).attr('font-family', null);
+    for (const a of [ax, ay]) { a.select('.domain').attr('stroke', 'var(--cds-chart-axis)'); a.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)'); }
+    ax.selectAll('text').attr('dy', '1.1em'); ay.selectAll('text').attr('dx', '-0.4em');
+    svg.append('text').attr('x', (m.left + w - m.right) / 2).attr('y', h - 6).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Meter km/h');
+    svg.append('text').attr('transform', `translate(14,${(m.top + h - m.bottom) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Engine rpm');
+    const cut = d3.max(ls, (r) => r.rpm);
+    svg.append('line').attr('x1', m.left).attr('x2', w - m.right).attr('y1', y(cut)).attr('y2', y(cut)).attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 4');
+    svg.append('text').attr('x', w - m.right).attr('y', y(cut) - 5).attr('text-anchor', 'end').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(`Cut ${fRpm(cut)} rpm`);
+    const gearsN = d3.groups(ls, (r) => r.gear).sort((a, b) => a[0] - b[0]);
+    for (const [gear, pts] of gearsN) {
+      const p = pts.slice().sort((a, b) => a.rpm - b.rpm);
+      const end = p[p.length - 1];
+      svg.append('line').attr('x1', x(p[0].kmh)).attr('y1', y(p[0].rpm)).attr('x2', x(end.kmh)).attr('y2', y(end.rpm)).attr('stroke', 'var(--cds-chart-muted)').attr('stroke-width', 1.5);
+      svg.append('text').attr('x', x(end.kmh) - 4).attr('y', y(end.rpm) + 14).attr('text-anchor', 'end').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(`${gear}`);
+    }
+    // Dashed drop lines from each shift point to the speed axis, labelled with the speed.
+    for (const s of ss) {
+      svg.append('line').attr('x1', x(s.kmh)).attr('x2', x(s.kmh)).attr('y1', y(s.rpm)).attr('y2', h - m.bottom).attr('stroke', color).attr('stroke-width', 1).attr('stroke-dasharray', '3 3').attr('opacity', 0.8);
+    }
+    const probe = svg.append('text').style('font-size', 'var(--cds-font-size-caption)').style('font-weight', '600');
+    let lastRight = -Infinity, row = 0;
+    for (const s of ss) {
+      const txt = fK(s.kmh);
+      probe.text(txt);
+      const tw = probe.node().getComputedTextLength();
+      const cx = x(s.kmh);
+      row = cx - tw / 2 < lastRight + 4 ? (row ? 0 : 1) : 0;
+      if (!row) lastRight = cx + tw / 2;
+      svg.append('text').attr('x', cx).attr('y', h - m.bottom + 30 + row * 14).attr('text-anchor', 'middle').attr('fill', color).style('font-size', 'var(--cds-font-size-caption)').style('font-weight', '600').text(txt);
+    }
+    probe.remove();
+    const path = [{ kmh: 0, rpm: 0 }];
+    for (const s of ss) { path.push({ kmh: s.kmh, rpm: s.rpm }); path.push({ kmh: s.kmh, rpm: s.land }); }
+    const top = gearsN[gearsN.length - 1][1].slice().sort((a, b) => a.rpm - b.rpm);
+    path.push({ kmh: top[top.length - 1].kmh, rpm: top[top.length - 1].rpm });
+    svg.append('path').attr('d', d3.line().x((p) => x(p.kmh)).y((p) => y(p.rpm))(path)).attr('fill', 'none').attr('stroke', color).attr('stroke-width', 2.5).attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round');
+    const tip = document.createElement('div'); tip.className = 'cr-tip'; tip.hidden = true; box.appendChild(tip);
+    svg.append('g').selectAll('circle').data(ss).join('circle').attr('cx', (s) => x(s.kmh)).attr('cy', (s) => y(s.rpm)).attr('r', 5.5).attr('fill', color).attr('stroke', 'var(--color-panel)').attr('stroke-width', 1.5)
+      .on('mousemove', (ev, s) => {
+        tip.textContent = '';
+        const a = document.createElement('div'); a.className = 'k'; a.textContent = `Shift ${s.shift.replace('-', ' → ')}`; tip.appendChild(a);
+        const b = document.createElement('div'); b.textContent = `${fRpm(s.rpm)} rpm at ${fK(s.kmh)} km/h`; tip.appendChild(b);
+        const c = document.createElement('div'); c.textContent = `Lands at ${fRpm(s.land)} rpm`; tip.appendChild(c);
+        tip.hidden = false;
+        const bx = box.getBoundingClientRect();
+        let left = ev.clientX - bx.left + 12, topp = ev.clientY - bx.top + 12;
+        if (left + tip.offsetWidth > bx.width) left = Math.max(0, ev.clientX - bx.left - tip.offsetWidth - 12);
+        if (topp + tip.offsetHeight > bx.height) topp = Math.max(0, ev.clientY - bx.top - tip.offsetHeight - 12);
+        tip.style.left = left + 'px'; tip.style.top = topp + 'px';
+      })
+      .on('mouseleave', () => { tip.hidden = true; });
+  }
+  dash.onData(drawGearing);
+})();
+
+(function () {
+  const GRADES = ['S', 'A', 'B', 'C', 'D'];
+  const f1 = d3.format('.1f');
+  const fInt = d3.format(',');
+  const signed = (v) => (v > 0 ? '+' : '') + v;
+  const state = { key: 'rank', dir: 'ascending', q: [], layout: '', grade: '' };
+
+  const body = document.getElementById('cr-body');
+  const search = document.getElementById('cr-search');
+  const layoutSel = document.getElementById('cr-layout');
+  const gradeSel = document.getElementById('cr-grade');
+
+  // Comma-separated terms: a row matches when any term appears in its cars or type code.
+  search.addEventListener('input', () => { state.q = search.value.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean); drawTable(); });
+  layoutSel.addEventListener('change', () => { state.layout = layoutSel.value; drawTable(); });
+  gradeSel.addEventListener('change', () => { state.grade = gradeSel.value; drawTable(); });
+  document.querySelectorAll('#cr-table th button').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.k;
+    if (state.key === k) state.dir = state.dir === 'ascending' ? 'descending' : 'ascending';
+    else { state.key = k; state.dir = (k === 'rank' || k === 'cars' || k === 'layout' || k === 'curve') ? 'ascending' : 'descending'; }
+    drawTable();
+  }));
+
+  let rows = [];
+
+  function gradeColor(g) { return dash.colors[GRADES.indexOf(g)] || dash.colors[0]; }
+
+  function drawTable() {
+    document.querySelectorAll('#cr-table th').forEach((th) => {
+      const b = th.querySelector('button');
+      if (b && b.dataset.k === state.key && th.dataset.field !== 'grade') th.setAttribute('aria-sort', state.dir);
+      else th.removeAttribute('aria-sort');
+    });
+    const num = ['rank', 'overall', 'acc', 'top', 'grip', 'vmax_mt', 'length', 'weight', 'A', 'B', 'C', 'D'].includes(state.key);
+    const list = rows.filter((r) =>
+      (!state.q.length || state.q.some((t) => String(r.cars).toLowerCase().includes(t) || String(r.type).toLowerCase().includes(t))) &&
+      (!state.layout || r.layout === state.layout) &&
+      (!state.grade || r.grade === state.grade));
+    list.sort((a, b) => {
+      const x = num ? +a[state.key] : String(a[state.key]);
+      const y = num ? +b[state.key] : String(b[state.key]);
+      const c = num ? x - y : x.localeCompare(y);
+      return state.dir === 'ascending' ? c : -c;
+    });
+    body.textContent = '';
+    for (const r of list) {
+      const tr = document.createElement('tr');
+      tr.dataset.key = r.type;
+      const cell = (text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text; tr.appendChild(td); return td; };
+      cell(String(r.rank), 'num');
+      const g = cell('', ''); const pill = document.createElement('span'); pill.className = 'cr-grade g-' + r.grade; pill.textContent = r.grade; g.appendChild(pill);
+      cell(String(r.cars), 'cars');
+      const o = cell('', 'num'); const wrap = document.createElement('span'); wrap.className = 'cr-bar';
+      const bar = document.createElement('i'); bar.style.width = (Math.max(0, +r.overall) * 0.5) + 'rem';
+      const t = document.createElement('span'); t.textContent = f1(+r.overall);
+      wrap.appendChild(bar); wrap.appendChild(t); o.appendChild(wrap);
+      cell(f1(+r.acc), 'num'); cell(f1(+r.top), 'num'); cell(f1(+r.grip), 'num');
+      cell(f1(+r.vmax_mt) + ' km/h', 'num');
+      cell(String(r.layout), 'opt'); cell(String(r.curve), 'opt');
+      cell(fInt(+r.length) + ' mm', 'num opt'); cell(signed(+r.weight), 'num opt');
+      for (const k of ['A', 'B', 'C', 'D']) cell(signed(+r[k]), 'num opt cr-raw');
+      body.appendChild(tr);
+    }
+  }
+
+  function drawMap() {
+    const box = document.getElementById('map');
+    const legend = document.getElementById('legend');
+    box.textContent = ''; legend.textContent = '';
+    const w = Math.max(260, box.clientWidth);
+    const h = 320;
+    const m = { top: 12, right: 14, bottom: 40, left: 44 };
+    const groups = d3.groups(rows, (r) => r.top + '|' + r.grip).map(([k, rs]) => ({ top: +rs[0].top, grip: +rs[0].grip, rs }));
+    const x = d3.scaleLinear([0, 10], [m.left, w - m.right]);
+    const y = d3.scaleLinear([0, 10], [h - m.bottom, m.top]);
+    const rScale = d3.scaleSqrt([1, d3.max(groups, (g) => g.rs.length) || 1], [4, 11]);
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${w} ${h}`).attr('role', 'img').attr('aria-label', 'Top end score against cornering score for every physics entry');
+    const grid = svg.append('g');
+    for (const v of [0, 2, 4, 6, 8, 10]) {
+      grid.append('line').attr('x1', x(v)).attr('x2', x(v)).attr('y1', m.top).attr('y2', h - m.bottom).attr('stroke', 'var(--cds-chart-grid)');
+      grid.append('line').attr('y1', y(v)).attr('y2', y(v)).attr('x1', m.left).attr('x2', w - m.right).attr('stroke', 'var(--cds-chart-grid)');
+    }
+    const ax = svg.append('g').attr('transform', `translate(0,${h - m.bottom})`).call(d3.axisBottom(x).ticks(5).tickSize(0)).attr('font-size', null).attr('font-family', null);
+    const ay = svg.append('g').attr('transform', `translate(${m.left},0)`).call(d3.axisLeft(y).ticks(5).tickSize(0)).attr('font-size', null).attr('font-family', null);
+    for (const a of [ax, ay]) { a.select('.domain').attr('stroke', 'var(--cds-chart-axis)'); a.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)'); }
+    ax.selectAll('text').attr('dy', '1.1em');
+    ay.selectAll('text').attr('dx', '-0.4em');
+    svg.append('text').attr('x', (m.left + w - m.right) / 2).attr('y', h - 6).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Top end →');
+    svg.append('text').attr('transform', `translate(12,${(m.top + h - m.bottom) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text('Cornering →');
+    const tip = document.createElement('div'); tip.className = 'cr-tip'; tip.hidden = true; box.appendChild(tip);
+    const best = (g) => g.rs.reduce((a, b) => (a.rank < b.rank ? a : b));
+    svg.append('g').selectAll('circle').data(groups.sort((a, b) => b.rs.length - a.rs.length)).join('circle')
+      .attr('cx', (g) => x(g.top)).attr('cy', (g) => y(g.grip)).attr('r', (g) => rScale(g.rs.length))
+      .attr('fill', (g) => gradeColor(best(g).grade)).attr('fill-opacity', 0.8)
+      .attr('stroke', 'var(--color-panel)').attr('stroke-width', 1)
+      .on('mousemove', (ev, g) => {
+        tip.textContent = '';
+        const head = document.createElement('div'); head.className = 'k';
+        head.textContent = `Top end ${f1(g.top)} · Cornering ${f1(g.grip)}`; tip.appendChild(head);
+        for (const r of g.rs.slice().sort((a, b) => a.rank - b.rank).slice(0, 6)) {
+          const line = document.createElement('div'); line.textContent = `${r.grade} · ${r.cars}`; tip.appendChild(line);
+        }
+        if (g.rs.length > 6) { const more = document.createElement('div'); more.className = 'k'; more.textContent = `and ${g.rs.length - 6} more`; tip.appendChild(more); }
+        tip.hidden = false;
+        const bx = box.getBoundingClientRect();
+        let left = ev.clientX - bx.left + 12, top = ev.clientY - bx.top + 12;
+        if (left + tip.offsetWidth > bx.width) left = Math.max(0, ev.clientX - bx.left - tip.offsetWidth - 12);
+        if (top + tip.offsetHeight > bx.height) top = Math.max(0, ev.clientY - bx.top - tip.offsetHeight - 12);
+        tip.style.left = left + 'px'; tip.style.top = top + 'px';
+      })
+      .on('mouseleave', () => { tip.hidden = true; });
+    for (const g of GRADES) {
+      const s = document.createElement('span'); const i = document.createElement('i'); i.style.background = gradeColor(g);
+      s.appendChild(i); s.appendChild(document.createTextNode('Grade ' + g)); legend.appendChild(s);
+    }
+  }
+
+  function fail(el) { el.textContent = ''; const d = document.createElement('div'); d.className = 'cr-fail'; d.textContent = 'Failed to load'; el.appendChild(d); }
+
+  dash.onData(() => {
+    const d = dash.data('ratings');
+    const s = dash.data('summary');
+    const box = document.getElementById('map');
+    const count = document.querySelector('[data-field="entries"]');
+    const top1 = document.querySelector('[data-field="cars"][data-where="rank=1"]');
+    if (d.status !== 'ok') {
+      rows = []; body.textContent = ''; document.getElementById('legend').textContent = '';
+      if (d.status === 'error') { box.classList.remove('dash-skeleton'); fail(box); top1.classList.remove('dash-skeleton'); top1.textContent = '—'; }
+      else { box.textContent = ''; box.classList.add('dash-skeleton'); }
+      if (s.status !== 'ok') count.textContent = '—';
+      return;
+    }
+    rows = d.data.map((r) => ({ ...r, rank: +r.rank }));
+    box.classList.remove('dash-skeleton');
+    const first = rows.find((r) => r.rank === 1);
+    top1.classList.remove('dash-skeleton'); top1.textContent = first ? String(first.cars) : '—';
+    count.classList.remove('dash-skeleton'); count.textContent = s.status === 'ok' && s.data[0] ? fInt(s.data[0].entries) : '—';
+    const layouts = [...new Set(rows.map((r) => r.layout))].sort();
+    if (layoutSel.options.length !== layouts.length + 1) {
+      layoutSel.length = 1;
+      for (const l of layouts) { const o = document.createElement('option'); o.value = l; o.textContent = l; layoutSel.appendChild(o); }
+      layoutSel.value = state.layout;
+    }
+    drawMap();
+    drawTable();
+  });
+})();
+</script>
+
+<p class="site-foot">Unofficial fan research. Values were read from the game's physics code (Wg6Enma) and have not been timed in races. Not affiliated with Bandai Namco.</p>
+</main>
+</body>
+</html>
