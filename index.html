@@ -125,11 +125,13 @@ window.dash = (function () {
   .cr-small th:first-child, .cr-small td:first-child { text-align: left; }
   .cr-small th { font-weight: var(--cds-font-weight-medium); }
   .cr-scroll { overflow-x: auto; }
-  .cr-grade { display: inline-block; min-width: 1.6rem; text-align: center; border-radius: var(--cds-radius); padding: 0 var(--cds-pad-xs); font-weight: 600; border: 1px solid currentColor; }
-  .cr-grade.g-S, .cr-grade.g-A { color: var(--color-ok); }
-  .cr-grade.g-B { color: var(--color-fg-muted); }
-  .cr-grade.g-C { color: var(--color-warn); }
-  .cr-grade.g-D { color: var(--color-bad); }
+  .cr { --grade-S: #e6b800; --grade-A: #e5484d; --grade-B: #2f9e5b; --grade-C: #3b7fe0; --grade-D: #8b9099; }
+  .cr-grade { display: inline-block; min-width: 1.6rem; text-align: center; border-radius: var(--cds-radius); padding: 0 var(--cds-pad-xs); font-weight: 600; color: #fff; }
+  .cr-grade.g-S { background: var(--grade-S); color: #1f1a00; }
+  .cr-grade.g-A { background: var(--grade-A); }
+  .cr-grade.g-B { background: var(--grade-B); }
+  .cr-grade.g-C { background: var(--grade-C); }
+  .cr-grade.g-D { background: var(--grade-D); }
   .cr-bar { display: flex; align-items: center; gap: var(--cds-gap-xs); justify-content: flex-end; }
   .cr-bar i { display: inline-block; height: 0.45rem; border-radius: 999px; background: var(--cds-chart-muted); }
   .cr-raw { color: var(--color-fg-muted); }
@@ -351,7 +353,8 @@ dash.calc('ratio_table', {
   const GRADES = ['S', 'A', 'B', 'C', 'D'];
   const f1 = d3.format('.1f'), f2 = d3.format('.2f'), fInt = d3.format(','), fRpm = d3.format(',');
   const signed = (v) => (v > 0 ? '+' : '') + v;
-  const gradeColor = (g) => dash.colors[GRADES.indexOf(g)] || dash.colors[0];
+  // Grade colours chosen by the user: S yellow, A red, B green, C blue, D grey.
+  const gradeColor = (g) => (GRADES.includes(g) ? `var(--grade-${g})` : 'var(--cds-chart-muted)');
 
   // Shared chart helpers.
   function axes(svg, x, y, w, h, m, o) {
@@ -540,7 +543,7 @@ dash.calc('ratio_table', {
     box.textContent = '';
     const pts = P.data.map((r) => ({ km: +r.m / 1000, kmh: +r.kmh, h: +r.height }));
     const w = Math.max(300, box.clientWidth);
-    const h1 = 230, h2 = 110, gap = 24, h = h1 + gap + h2 + 40;
+    const h1 = 230, h2 = 110, gap = 24, h = h1 + gap + h2 + 56;
     const m = { top: 14, right: 16, left: 52 };
     const x = d3.scaleLinear(d3.extent(pts, (p) => p.km), [m.left, w - m.right]);
     const ylo = Math.floor(d3.min(pts, (p) => p.kmh) - 1), yhi = Math.ceil(d3.max(pts, (p) => p.kmh) + 1);
@@ -613,7 +616,7 @@ dash.calc('ratio_table', {
     if (top) {
       const tx = x(+top.kmh);
       svg.append('rect').attr('x', tx - 3).attr('width', 6).attr('y', m.top).attr('height', h - m.bottom - m.top).style('fill', 'var(--cds-chart-muted)').attr('opacity', 0.5);
-      svg.append('text').attr('x', tx - 6).attr('y', m.top + 12).attr('text-anchor', 'end').attr('fill', 'var(--cds-text-secondary)').style('font-size', 'var(--cds-font-size-caption)').text(`Drag limit ${f1(+top.kmh)} km/h`);
+      svg.append('text').attr('x', tx + 8).attr('y', h - m.bottom - 8).attr('text-anchor', 'start').attr('fill', 'var(--cds-text-secondary)').style('font-size', 'var(--cds-font-size-caption)').text(`Drag limit ${f1(+top.kmh)} km/h`);
     }
     const gearsN = d3.groups(ls, (r) => r.gear).sort((a, b) => a[0] - b[0]);
     for (const [gear, pts] of gearsN) {
