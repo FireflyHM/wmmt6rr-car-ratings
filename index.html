@@ -179,12 +179,12 @@ window.dash = (function () {
       <ul class="cr-method">
         <li><b>Acceleration</b>: simulated 100 to 300 km/h time on the normal courses at a 17/17 full tune, from the car's torque curve and gearbox plus value A.</li>
         <li><b>Grip</b>: value D (tyre sideways grip). <b>Brakes</b>: value C (brake force).</li>
-        <li><b>Size</b>: body width plus a quarter of the length. Smaller touches walls and traffic less.</li>
-        <li><b>Bump</b>: the car's collision weight. Heavier cars get shoved less by the opponent or the ghost. Traffic uses the same weight for every car.</li>
+        <li><b>Compact</b>: how small the body is (width plus a quarter of the length), so 10 = the smallest car. Smaller touches walls and traffic less.</li>
+        <li><b>Bump weight</b>: the car's collision weight, so 10 = the heaviest. Heavier cars get shoved less by the opponent or the ghost. Traffic uses the same weight for every car.</li>
         <li><b>Top speed</b>: the peak at the bottom of the Tokyo Port tunnel (value B). It is worth under 2 km/h from best to worst, so it barely counts.</li>
-        <li><b>Time attack</b> has no traffic or opponents: grip 35%, acceleration 30%, brakes 20%, size 10%, top speed 5%.</li>
-        <li><b>VS and ghost battles</b> add traffic and bumps: acceleration 30%, grip 20%, size 20%, brakes 15%, bump 10%, top speed 5%.</li>
-        <li>Each part is scaled 0 to 10 across all cars. Grades are by rank: S top 10%, A next 20%, B middle 40%, C next 20%, D bottom 10%.</li>
+        <li><b>Time attack</b> has no traffic or opponents: grip 35%, acceleration 30%, brakes 20%, compact 10%, top speed 5%.</li>
+        <li><b>VS and ghost battles</b> add traffic and bumps: acceleration 30%, grip 20%, compact 20%, brakes 15%, bump weight 10%, top speed 5%.</li>
+        <li>Each part is scaled 0 to 10 across all cars, and higher is always better. Grades are by rank: S top 10%, A next 20%, B middle 40%, C next 20%, D bottom 10%.</li>
         <li>Drive layout (FF, FR, 4WD...) only changes sound and effects, and the old "weight offset" is camera only, so neither is scored. The weights are a judgement call; the parts are read from the game's code, not timed in races.</li>
       </ul>
     </div>
@@ -220,8 +220,8 @@ window.dash = (function () {
           <th data-field="accel" class="num"><button type="button" data-k="accel">Accel.</button></th>
           <th data-field="grip" class="num"><button type="button" data-k="grip">Grip</button></th>
           <th data-field="brakes" class="num"><button type="button" data-k="brakes">Brakes</button></th>
-          <th data-field="size" class="num opt"><button type="button" data-k="size">Size</button></th>
-          <th data-field="bump" class="num opt"><button type="button" data-k="bump">Bump</button></th>
+          <th data-field="size" class="num opt" title="Higher = smaller body (10 = smallest)"><button type="button" data-k="size">Compact</button></th>
+          <th data-field="bump" class="num opt" title="Higher = heavier in bumps with the opponent or ghost (10 = heaviest)"><button type="button" data-k="bump">Bump weight</button></th>
           <th data-field="tunnel_kmh" class="num"><button type="button" data-k="tunnel_kmh">Top speed</button></th>
           <th data-field="gearbox" class="opt"><button type="button" data-k="gearbox">Gearbox</button></th>
           <th data-field="acc_s" class="num opt"><button type="button" data-k="acc_s">100-300</button></th>
